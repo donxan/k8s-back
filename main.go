@@ -3,14 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
-	"os"
+	"os" // 替换 ioutil
 	"path/filepath"
-	yaml "sigs.k8s.io/yaml/goyaml.v3"
 	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
+	yaml "gopkg.in/yaml.v3" // 更新为 yaml.v3
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,6 +54,7 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 		return nil
 	}
 
+	// 深度复制一份资源对象，避免修改原始对象
 	cleanedResource := make(map[string]interface{})
 	for k, v := range resource {
 		cleanedResource[k] = v
@@ -62,19 +62,22 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 
 	metadata, ok := cleanedResource["metadata"].(map[string]interface{})
 	if ok {
+		// 清理元数据中的字段
 		for _, field := range []string{"creationTimestamp", "resourceVersion", "selfLink", "uid", "managedFields", "generation"} {
 			delete(metadata, field)
 		}
 
+		// 清理特定annotations
 		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
 			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 			if len(annotations) == 0 {
 				delete(metadata, "annotations")
 			} else {
-				metadata["annotations"] = annotations
+				metadata["annotations"] = annotations // 确保更新回去
 			}
 		}
 
+		// 清理空字段
 		for _, field := range []string{"annotations", "labels", "finalizers"} {
 			if val, exists := metadata[field]; exists {
 				if m, isMap := val.(map[string]interface{}); isMap && len(m) == 0 {
@@ -84,6 +87,7 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 		}
 	}
 
+	// 删除整个status字段
 	delete(cleanedResource, "status")
 
 	kind, _ := cleanedResource["kind"].(string)
@@ -94,6 +98,7 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 					if template, ok := spec["template"].(map[string]interface{}); ok {
 						if tmplMetadata, ok := template["metadata"].(map[string]interface{}); ok {
 							if tmplLabels, ok := tmplMetadata["labels"].(map[string]interface{}); ok {
+								// 如果 matchLabels 和 template.metadata.labels 相同，则删除 matchLabels
 								if mapsEqual(matchLabels, tmplLabels) {
 									delete(selector, "matchLabels")
 								}
@@ -108,6 +113,7 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 			for _, field := range []string{"clusterIP", "clusterIPs", "internalTrafficPolicy", "externalTrafficPolicy", "ipFamilies", "ipFamilyPolicy", "sessionAffinityConfig"} {
 				delete(spec, field)
 			}
+			// 如果类型不是 NodePort，则删除端口中的 nodePort
 			if serviceType, ok := spec["type"].(string); ok && serviceType != "NodePort" {
 				if ports, ok := spec["ports"].([]interface{}); ok {
 					for _, p := range ports {
@@ -150,6 +156,7 @@ func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	name, _ := metadata["name"].(string)
 	secretType, _ := secretObj["type"].(string)
 
+	// 排除默认 token 和 docker 配置以及 Helm 相关的内部 Secret
 	if strings.Contains(name, "default-token") || strings.HasPrefix(name, "sh.helm.release.v1.") {
 		return false
 	}
@@ -165,29 +172,30 @@ func main() {
 	var kubeconfig string
 	var namespace string
 	var resourceTypesStr string
+	var outputDir string // 新增：自定义输出目录
 
-	// --- 核心改动在这里 ---
-	// 将 kubeconfig 的默认值设置为空字符串。
-	// client-go 会在没有明确指定 kubeconfig 时，自动按顺序查找：
-	// 1. KUBECONFIG 环境变量
-	// 2. ~/.kube/config (或 %USERPROFILE%\.kube\config 在 Windows 上)
 	pflag.StringVar(&kubeconfig, "kubeconfig", "", "(可选) kubeconfig 文件路径。如果未指定，将使用默认查找顺序 (KUBECONFIG 环境变量或 ~/.kube/config)。")
-	// --- 核心改动结束 ---
-
 	pflag.StringVarP(&namespace, "namespace", "n", "all", "指定要备份的命名空间 (例如: 'my-namespace')。使用 'all' (默认) 备份所有命名空间。")
 	pflag.StringVarP(&resourceTypesStr, "type", "t", "", "指定一个或多个要备份的资源类型，用逗号分隔 (例如: 'deployments,secrets')。如果不指定，将备份所有支持的类型。")
+	pflag.StringVarP(&outputDir, "output-dir", "o", ".", "指定备份文件的根目录。默认备份到当前目录。") // 新增命令行参数
 	pflag.Parse()
 
 	// 构建 Kubeconfig 配置
-	// clientcmd.BuildConfigFromFlags("", kubeconfig) 会自动处理 kubeconfig 为空字符串的情况，
-	// 查找默认路径或 KUBECONFIG 环境变量。
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		fmt.Printf("错误：无法加载 Kubernetes 配置: %v\n", err)
-		fmt.Println("请确保您的 kubeconfig 文件存在且有效，或者 Kubernetes 集群可访问。")
-		if kubeconfig == "" {
-			fmt.Println("尝试使用 'export KUBECONFIG=/path/to/your/kubeconfig' 或通过 '--kubeconfig' 参数指定路径。")
+		fmt.Println("\n请检查以下几点以解决配置问题:")
+		fmt.Println("  1. 确认您的 Kubernetes 集群正在运行且可访问。")
+		fmt.Println("  2. 如果您在本地运行，请确保 kubeconfig 文件存在。")
+		if kubeconfig != "" {
+			fmt.Printf("     您已通过 --kubeconfig 参数指定了路径 '%s'，请检查该文件是否存在且内容有效。\n", kubeconfig)
+		} else {
+			fmt.Println("     程序将尝试在以下默认位置查找 kubeconfig 文件:")
+			fmt.Println("       - 'KUBECONFIG' 环境变量指定的路径。")
+			fmt.Println("       - 用户主目录下的 '.kube/config' 文件 (例如：Windows 系统上通常是 '%USERPROFILE%\\.kube\\config')。")
+			fmt.Println("     如果这些位置没有有效的 kubeconfig，请手动通过 '--kubeconfig' 参数指定正确的路径。")
 		}
+		fmt.Println("  3. 您可以使用 'kubectl cluster-info' 命令来测试您的 Kubernetes 连接和配置。")
 		os.Exit(1)
 	}
 
@@ -198,11 +206,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 创建备份目录
-	backupDir := fmt.Sprintf("k8s-backup-%s", time.Now().Format("20060102150405"))
-	err = os.MkdirAll(backupDir, os.ModePerm)
+	// 构造最终的备份根目录路径
+	// 结构为: outputDir/k8s-backup-时间戳/
+	finalBackupRoot := filepath.Join(outputDir, fmt.Sprintf("k8s-backup-%s", time.Now().Format("20060102150405")))
+	err = os.MkdirAll(finalBackupRoot, os.ModePerm)
 	if err != nil {
-		fmt.Printf("错误：创建备份目录失败: %v\n", err)
+		fmt.Printf("错误：创建备份根目录失败 '%s': %v\n", finalBackupRoot, err)
 		os.Exit(1)
 	}
 
@@ -288,16 +297,20 @@ func main() {
 				fmt.Printf("警告：资源 %s 没有有效的名称，跳过。\n", kindName)
 				continue
 			}
-			namespaceDir := "_cluster_"
+
+			// 确定命名空间目录名
+			namespaceDir := "_cluster_" // 默认用于集群范围资源
 			if ns, ok := metadata["namespace"].(string); ok && ns != "" {
 				namespaceDir = ns
 			}
 
-			typeDir := filepath.Join(backupDir, resTypePlural)
-			nsDir := filepath.Join(typeDir, namespaceDir)
-			err = os.MkdirAll(nsDir, os.ModePerm)
+			// 构造新的目录结构: finalBackupRoot/namespace/resource_type/
+			nsDir := filepath.Join(finalBackupRoot, namespaceDir)
+			resourceTypeDir := filepath.Join(nsDir, resTypePlural) // 资源类型目录在命名空间目录下
+
+			err = os.MkdirAll(resourceTypeDir, os.ModePerm) // 创建资源类型目录
 			if err != nil {
-				fmt.Printf("错误：创建目录 %s 失败: %v\n", nsDir, err)
+				fmt.Printf("错误：创建目录 %s 失败: %v\n", resourceTypeDir, err)
 				continue
 			}
 
@@ -320,14 +333,14 @@ func main() {
 				outputData["rules"] = rules
 			}
 
-			yamlData, err := yaml.Marshal(outputData)
+			yamlData, err := yaml.Marshal(outputData) // 使用 yaml.v3 的 Marshal
 			if err != nil {
 				fmt.Printf("警告：无法将资源 %s/%s 转换为 YAML: %v\n", namespaceDir, name, err)
 				continue
 			}
 
-			filename := filepath.Join(nsDir, fmt.Sprintf("%s.yaml", name))
-			err = ioutil.WriteFile(filename, yamlData, 0644)
+			filename := filepath.Join(resourceTypeDir, fmt.Sprintf("%s.yaml", name)) // 文件保存到资源类型目录下
+			err = os.WriteFile(filename, yamlData, 0644)                             // 使用 os.WriteFile
 			if err != nil {
 				fmt.Printf("警告：保存文件 %s 失败: %v\n", filename, err)
 				continue
@@ -338,10 +351,10 @@ func main() {
 		totalBackedUpResources += backedUpCountForType
 	}
 
-	fmt.Printf("\n--- 备份完成 ---\n")
-	fmt.Printf("备份目录: %s\n", filepath.Join(os.TempDir(), backupDir)) // 再次提醒，这里如果想输出绝对路径，可能需要调整
+	fmt.Printf("\n--- 备份完成 🎉 ---\n")
+	fmt.Printf("备份目录: %s\n", finalBackupRoot)
 	fmt.Printf("总计备份资源: %d 个\n", totalBackedUpResources)
 	fmt.Println("\n要恢复资源，请导航到相应的资源类型和命名空间目录，然后应用 YAML 文件:")
-	fmt.Println("  cd k8s-backup-<日期时间>/<resource_type>/<namespace>/")
+	fmt.Println("  cd <您的自定义目录>/k8s-backup-<日期时间>/<namespace>/<resource_type>/")
 	fmt.Println("  kubectl apply -f <resource_name>.yaml")
 }
