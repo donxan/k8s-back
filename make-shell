@@ -1,0 +1,72 @@
+# Makefile for Cross-Platform Go Compilation
+
+# 使用 Bash 作为 shell，确保命令在不同系统上行为一致
+SHELL := /bin/bash
+
+# .PHONY 声明所有目标为 phony，表示它们不是文件名，即使存在同名文件也会执行
+.PHONY: all clean build linux-amd64 linux-arm64 windows-amd64 darwin-amd64 darwin-arm64
+
+# 定义二进制文件的名称
+BINARY_NAME := k8s-backup
+
+# 定义备份目录的通用前缀，用于 clean 目标
+BACKUP_DIR_PREFIX := k8s-backup-
+
+# -----------------------------------------------------------------------------
+# 默认目标：为当前操作系统和架构编译
+# -----------------------------------------------------------------------------
+all: build
+	@echo "✅ 本地编译完成: ${BINARY_NAME}"
+
+# -----------------------------------------------------------------------------
+# 清理目标：删除编译生成的可执行文件和备份目录
+# -----------------------------------------------------------------------------
+clean:
+	@echo "🧹 正在清理生成的文件和备份目录..."
+	rm -f ${BINARY_NAME}
+	rm -f ${BINARY_NAME}-*
+	# 查找并删除所有以 BACKUP_DIR_PREFIX 开头的目录
+	find . -maxdepth 1 -type d -name "${BACKUP_DIR_PREFIX}*" -exec rm -rf {} +
+	@echo "🗑️ 清理完成。"
+
+# -----------------------------------------------------------------------------
+# 构建目标：与 'all' 相同，明确的本地构建命令
+# -----------------------------------------------------------------------------
+build:
+	@echo "🏗️ 正在为当前系统编译 ${BINARY_NAME}..."
+	go build -o ${BINARY_NAME} .
+
+# -----------------------------------------------------------------------------
+# 跨平台编译目标
+# -----------------------------------------------------------------------------
+
+# 编译 Linux 64位 (AMD64)
+linux-amd64:
+	@echo "🏗️ 正在编译 Linux 64位 (AMD64) 版本..."
+	GOOS=linux GOARCH=amd64 go build -o ${BINARY_NAME}-linux-amd64 .
+	@echo "✅ Linux 64位 (AMD64) 版本编译完成: ${BINARY_NAME}-linux-amd64"
+
+# 编译 Linux ARM 64位 (例如 Raspberry Pi 3/4)
+linux-arm64:
+	@echo "🏗️ 正在编译 Linux ARM 64位 版本..."
+	GOOS=linux GOARCH=arm64 go build -o ${BINARY_NAME}-linux-arm64 .
+	@echo "✅ Linux ARM 64位 版本编译完成: ${BINARY_NAME}-linux-arm64"
+
+# 编译 Windows 64位 (AMD64)
+windows-amd64:
+	@echo "🏗️ 正在编译 Windows 64位 (AMD64) 版本..."
+	GOOS=windows GOARCH=amd64 go build -o ${BINARY_NAME}-windows-amd64.exe .
+	@echo "✅ Windows 64位 (AMD64) 版本编译完成: ${BINARY_NAME}-windows-amd64.exe"
+
+# 编译 macOS Intel 64位 (AMD64)
+darwin-amd64:
+	@echo "🏗️ 正在编译 macOS Intel 64位 (AMD64) 版本..."
+	GOOS=darwin GOARCH=amd64 go build -o ${BINARY_NAME}-darwin-amd64 .
+	@echo "✅ macOS Intel 64位 (AMD64) 版本编译完成: ${BINARY_NAME}-darwin-amd64"
+
+# 编译 macOS Apple Silicon (ARM64)
+darwin-arm64:
+	@echo "🏗️ 正在编译 macOS Apple Silicon (ARM64) 版本..."
+	GOOS=darwin GOARCH=arm64 go build -o ${BINARY_NAME}-darwin-arm64 .
+	@echo "✅ macOS Apple Silicon (ARM64) 版本编译完成: ${BINARY_NAME}-darwin-arm64"
+
