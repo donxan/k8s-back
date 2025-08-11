@@ -18,6 +18,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// version 变量将在编译时由 Makefile 注入，用于显示程序版本
+var version string = "unknown" // 默认值，如果未通过 ldflags 注入则显示此值
+
 // ResourceKindMap 资源类型到 Kind 的映射
 var ResourceKindMap = map[string]string{
 	"configmaps":               "ConfigMap",
@@ -350,7 +353,14 @@ func main() {
 		fmt.Printf("备份了 %d 个 %ss。\n", backedUpCountForType, kindName)
 		totalBackedUpResources += backedUpCountForType
 	}
+	var showVersion bool
+	pflag.BoolVar(&showVersion, "version", false, "显示程序版本信息")
+	pflag.Parse()
 
+	if showVersion {
+		fmt.Printf("Kubernetes 备份工具版本: %s\n", version)
+		return // 打印版本后退出
+	}
 	fmt.Printf("\n--- 备份完成 🎉 ---\n")
 	fmt.Printf("备份目录: %s\n", finalBackupRoot)
 	fmt.Printf("总计备份资源: %d 个\n", totalBackedUpResources)
