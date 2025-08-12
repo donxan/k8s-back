@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings" // 确保导入 strings 包
+	"strings"
 	"time"
 
 	"github.com/spf13/pflag"
-	yaml "gopkg.in/yaml.v3" // 确保使用 yaml.v3
+	yaml "gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -163,7 +163,7 @@ func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	return true
 }
 
-// processStringMapValues 递归处理 map[string]interface{} 中的字符串值，替换逸码字符
+// processStringMapValues 递归处理 map[string]interface{} 中的字符串值，替换逸码字符和非标准空格
 func processStringMapValues(m map[string]interface{}) map[string]interface{} {
 	if m == nil {
 		return nil
@@ -176,6 +176,8 @@ func processStringMapValues(m map[string]interface{}) map[string]interface{} {
 			// 解逸码字面量的 \\n 和 \\r，转换为实际的 \n 和 \r
 			s = strings.ReplaceAll(s, "\\n", "\n")
 			s = strings.ReplaceAll(s, "\\r", "\r")
+			// 新增：将非中断空格 (\u00A0) 替换为标准空格
+			s = strings.ReplaceAll(s, "\u00A0", " ")
 			processedMap[k] = s
 		} else if subMap, isMap := v.(map[string]interface{}); isMap {
 			// 递归处理嵌套的 map
