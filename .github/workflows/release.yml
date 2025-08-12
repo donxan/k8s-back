@@ -46,7 +46,17 @@ jobs:
       env:
         # Pass the extracted tag version to the Makefile's VERSION variable
         # This ensures the binary's internal version matches the release tag.
-        VERSION: ${{ env.RELEASE_VERSION }} 
+        VERSION: ${{ env.RELEASE_VERSION }}
+    - name: Commit #上传新的bin到仓库
+      run: |
+        git config --global user.email donxan@gmail.com
+        git config --global user.name donxan
+        git add .
+        git commit -m "update new bin files" -a
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
     - name: Upload Binaries as Artifacts # 步骤6: 将编译好的二进制文件作为工作流产物上传
       uses: actions/upload-artifact@v4
       with:
