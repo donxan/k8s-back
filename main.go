@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"strings" // 确保导入 strings 包
 	"time"
 
 	"github.com/spf13/pflag"
@@ -18,10 +18,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// version variable will be injected by Makefile at compile time to display program version
-var version string = "unknown" // Default value, if not injected via ldflags
+// version 变量将在编译时由 Makefile 注入，用于显示程序版本
+var version string = "unknown" // 默认值，如果未通过 ldflags 注入则显示此值
 
-// ResourceKindMap maps resource type (plural) to its Kind (singular)
+// ResourceKindMap 资源类型到 Kind 的映射
 var ResourceKindMap = map[string]string{
 	"configmaps":               "ConfigMap",
 	"deployments":              "Deployment",
@@ -36,7 +36,7 @@ var ResourceKindMap = map[string]string{
 	"serviceaccounts":          "ServiceAccount",
 }
 
-// GroupVersionResourceMap maps resource type (plural) to its GroupVersionResource (GVR)
+// GroupVersionResourceMap 资源类型到 GroupVersionResource 的映射
 var GroupVersionResourceMap = map[string]schema.GroupVersionResource{
 	"configmaps":               {Group: "", Version: "v1", Resource: "configmaps"},
 	"deployments":              {Group: "apps", Version: "v1", Resource: "deployments"},
@@ -51,13 +51,12 @@ var GroupVersionResourceMap = map[string]schema.GroupVersionResource{
 	"serviceaccounts":          {Group: "", Version: "v1", Resource: "serviceaccounts"},
 }
 
-// CleanResource cleans unnecessary fields from the resource
+// CleanResource 清理资源中无用字段
 func CleanResource(resource map[string]interface{}) map[string]interface{} {
 	if resource == nil {
 		return nil
 	}
 
-	// Make a deep copy to avoid modifying the original unstructured.Unstructured object directly
 	cleanedResource := make(map[string]interface{})
 	for k, v := range resource {
 		cleanedResource[k] = v
@@ -65,22 +64,19 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 
 	metadata, ok := cleanedResource["metadata"].(map[string]interface{})
 	if ok {
-		// Clean fields in metadata
 		for _, field := range []string{"creationTimestamp", "resourceVersion", "selfLink", "uid", "managedFields", "generation"} {
 			delete(metadata, field)
 		}
 
-		// Clean specific annotations
 		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
 			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 			if len(annotations) == 0 {
 				delete(metadata, "annotations")
 			} else {
-				metadata["annotations"] = annotations // Ensure update back
+				metadata["annotations"] = annotations
 			}
 		}
 
-		// Clean empty fields
 		for _, field := range []string{"annotations", "labels", "finalizers"} {
 			if val, exists := metadata[field]; exists {
 				if m, isMap := val.(map[string]interface{}); isMap && len(m) == 0 {
@@ -90,7 +86,6 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 		}
 	}
 
-	// Delete the entire status field
 	delete(cleanedResource, "status")
 
 	kind, _ := cleanedResource["kind"].(string)
@@ -101,7 +96,6 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 					if template, ok := spec["template"].(map[string]interface{}); ok {
 						if tmplMetadata, ok := template["metadata"].(map[string]interface{}); ok {
 							if tmplLabels, ok := tmplMetadata["labels"].(map[string]interface{}); ok {
-								// If matchLabels and template.metadata.labels are identical, delete matchLabels
 								if mapsEqual(matchLabels, tmplLabels) {
 									delete(selector, "matchLabels")
 								}
@@ -116,7 +110,6 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 			for _, field := range []string{"clusterIP", "clusterIPs", "internalTrafficPolicy", "externalTrafficPolicy", "ipFamilies", "ipFamilyPolicy", "sessionAffinityConfig"} {
 				delete(spec, field)
 			}
-			// If type is not NodePort, delete nodePort from ports
 			if serviceType, ok := spec["type"].(string); ok && serviceType != "NodePort" {
 				if ports, ok := spec["ports"].([]interface{}); ok {
 					for _, p := range ports {
@@ -136,7 +129,7 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 	return cleanedResource
 }
 
-// mapsEqual compares two map[string]interface{} for equality
+// mapsEqual 比较两个 map[string]interface{} 是否相等
 func mapsEqual(m1, m2 map[string]interface{}) bool {
 	if len(m1) != len(m2) {
 		return false
@@ -150,7 +143,7 @@ func mapsEqual(m1, m2 map[string]interface{}) bool {
 	return true
 }
 
-// ShouldBackupSecret determines if a Secret should be backed up
+// ShouldBackupSecret 判断 Secret 是否需要备份
 func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	metadata, ok := secretObj["metadata"].(map[string]interface{})
 	if !ok {
@@ -159,7 +152,6 @@ func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	name, _ := metadata["name"].(string)
 	secretType, _ := secretObj["type"].(string)
 
-	// Exclude default tokens and docker config secrets, as well as Helm internal secrets
 	if strings.Contains(name, "default-token") || strings.HasPrefix(name, "sh.helm.release.v1.") {
 		return false
 	}
@@ -171,8 +163,7 @@ func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	return true
 }
 
-// processStringMapValues recursively processes string values in a map[string]interface{},
-// replacing escaped characters with actual newlines.
+// processStringMapValues 递归处理 map[string]interface{} 中的字符串值，替换逸码字符
 func processStringMapValues(m map[string]interface{}) map[string]interface{} {
 	if m == nil {
 		return nil
@@ -180,17 +171,17 @@ func processStringMapValues(m map[string]interface{}) map[string]interface{} {
 	processedMap := make(map[string]interface{})
 	for k, v := range m {
 		if s, isString := v.(string); isString {
-			// Convert Windows-style newlines to Unix-style
+			// 将 Windows 风格的换行符转换为 Unix 风格
 			s = strings.ReplaceAll(s, "\r\n", "\n")
-			// Unescape literal "\n" and "\r" to actual newline and carriage return characters
+			// 解逸码字面量的 \\n 和 \\r，转换为实际的 \n 和 \r
 			s = strings.ReplaceAll(s, "\\n", "\n")
 			s = strings.ReplaceAll(s, "\\r", "\r")
 			processedMap[k] = s
 		} else if subMap, isMap := v.(map[string]interface{}); isMap {
-			// Recursively process nested maps
+			// 递归处理嵌套的 map
 			processedMap[k] = processStringMapValues(subMap)
 		} else {
-			// Non-string values remain unchanged
+			// 非字符串值保持不变
 			processedMap[k] = v
 		}
 	}
@@ -202,56 +193,56 @@ func main() {
 	var namespace string
 	var resourceTypesStr string
 	var outputDir string
-	var showVersion bool // Version flag
+	var showVersion bool // 版本标志
 
-	pflag.StringVar(&kubeconfig, "kubeconfig", "", "(Optional) Path to the kubeconfig file. If not specified, default search order will be used (KUBECONFIG environment variable or ~/.kube/config).")
-	pflag.StringVarP(&namespace, "namespace", "n", "all", "Specify the namespace to backup resources from (e.g., 'my-namespace'). Use 'all' (default) to backup resources from all namespaces.")
-	pflag.StringVarP(&resourceTypesStr, "type", "t", "", "Specify one or more resource types to backup, separated by commas (e.g., 'deployments,secrets'). If not specified, all supported types will be backed up.")
-	pflag.StringVarP(&outputDir, "output-dir", "o", ".", "Specify the root directory for backup files. Defaults to the current directory.")
-	pflag.BoolVarP(&showVersion, "version", "v", false, "Display program version information.")
+	pflag.StringVar(&kubeconfig, "kubeconfig", "", "(可选) kubeconfig 文件路径。如果未指定，将使用默认查找顺序 (KUBECONFIG 环境变量或 ~/.kube/config)。")
+	pflag.StringVarP(&namespace, "namespace", "n", "all", "指定要备份的命名空间 (例如: 'my-namespace')。使用 'all' (默认) 备份所有命名空间。")
+	pflag.StringVarP(&resourceTypesStr, "type", "t", "", "指定一个或多个要备份的资源类型，用逗号分隔 (例如: 'deployments,secrets')。如果不指定，将备份所有支持的类型。")
+	pflag.StringVarP(&outputDir, "output-dir", "o", ".", "指定备份文件的根目录。默认备份到当前目录。")
+	pflag.BoolVarP(&showVersion, "version", "v", false, "显示程序版本信息。")
 	pflag.Parse()
 
-	// If --version or -v flag is specified, print version and exit
+	// 如果指定了 --version 或 -v 标志，则打印版本并退出
 	if showVersion {
-		fmt.Printf("Kubernetes Backup Tool Version: %s\n", version)
+		fmt.Printf("Kubernetes 备份工具版本: %s\n", version)
 		return
 	}
 
-	// Build Kubeconfig configuration
+	// 构建 Kubeconfig 配置
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		fmt.Printf("Error: Failed to load Kubernetes configuration: %v\n", err)
-		fmt.Println("\nPlease check the following to resolve configuration issues:")
-		fmt.Println("  1. Confirm your Kubernetes cluster is running and accessible.")
-		fmt.Println("  2. If running locally, ensure the kubeconfig file exists.")
+		fmt.Printf("错误：无法加载 Kubernetes 配置: %v\n", err)
+		fmt.Println("\n请检查以下几点以解决配置问题:")
+		fmt.Println("  1. 确认您的 Kubernetes 集群正在运行且可访问。")
+		fmt.Println("  2. 如果您在本地运行，请确保 kubeconfig 文件存在。")
 		if kubeconfig != "" {
-			fmt.Printf("     You specified path '%s' via --kubeconfig argument, please check if the file exists and is valid.\n", kubeconfig)
+			fmt.Printf("     您已通过 --kubeconfig 参数指定了路径 '%s'，请检查该文件是否存在且内容有效。\n", kubeconfig)
 		} else {
-			fmt.Println("     The program will try to find the kubeconfig file in the following default locations:")
-			fmt.Println("       - The path specified by the 'KUBECONFIG' environment variable.")
-			fmt.Println("       - The '.kube/config' file under your user's home directory (e.g., '%USERPROFILE%\\.kube\\config' on Windows).")
-			fmt.Println("     If no valid kubeconfig is found in these locations, please manually specify the correct path using the '--kubeconfig' argument.")
+			fmt.Println("     程序将尝试在以下默认位置查找 kubeconfig 文件:")
+			fmt.Println("       - 'KUBECONFIG' 环境变量指定的路径。")
+			fmt.Println("       - 用户主目录下的 '.kube/config' 文件 (例如：Windows 系统上通常是 '%USERPROFILE%\\.kube\\config')。")
+			fmt.Println("     如果这些位置没有有效的 kubeconfig，请手动通过 '--kubeconfig' 参数指定正确的路径。")
 		}
-		fmt.Println("  3. You can use the 'kubectl cluster-info' command to test your Kubernetes connection and configuration.")
+		fmt.Println("  3. 您可以使用 'kubectl cluster-info' 命令来测试您的 Kubernetes 连接和配置。")
 		os.Exit(1)
 	}
 
-	// Create dynamic client
+	// 创建动态客户端
 	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		fmt.Printf("Error: Failed to create Kubernetes dynamic client: %v\n", err)
+		fmt.Printf("错误：创建 Kubernetes 动态客户端失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Construct the final backup root directory path
+	// 构造最终的备份根目录路径
 	finalBackupRoot := filepath.Join(outputDir, fmt.Sprintf("k8s-backup-%s", time.Now().Format("20060102150405")))
 	err = os.MkdirAll(finalBackupRoot, os.ModePerm)
 	if err != nil {
-		fmt.Printf("Error: Failed to create backup root directory '%s': %v\n", finalBackupRoot, err)
+		fmt.Printf("错误：创建备份根目录失败 '%s': %v\n", finalBackupRoot, err)
 		os.Exit(1)
 	}
 
-	// Determine resource types to backup
+	// 确定要备份的资源类型
 	var resourceTypesToBackup []string
 	if resourceTypesStr != "" {
 		resourceTypesToBackup = strings.Split(resourceTypesStr, ",")
@@ -263,16 +254,16 @@ func main() {
 
 	totalBackedUpResources := 0
 
-	// Process each resource type
+	// 处理每种资源
 	for _, resTypePlural := range resourceTypesToBackup {
 		kindName := ResourceKindMap[resTypePlural]
 		gvr, ok := GroupVersionResourceMap[resTypePlural]
 		if !ok {
-			fmt.Printf("Warning: Unsupported resource type '%s', skipping.\n", resTypePlural)
+			fmt.Printf("警告：不支持的资源类型 '%s'，跳过。\n", resTypePlural)
 			continue
 		}
 
-		fmt.Printf("\n--- Processing %ss ---\n", kindName)
+		fmt.Printf("\n--- 正在处理 %ss ---\n", kindName)
 
 		var resClient dynamic.ResourceInterface
 		if namespace == "all" {
@@ -283,18 +274,18 @@ func main() {
 
 		unstructuredList, err := resClient.List(context.TODO(), metav1.ListOptions{})
 		if err != nil {
-			fmt.Printf("Error: Failed to get %s resources: %v\n", resTypePlural, err)
+			fmt.Printf("错误：获取 %s 资源失败: %v\n", resTypePlural, err)
 			continue
 		}
 
 		resources := unstructuredList.Items
 		if len(resources) == 0 {
-			fmt.Printf("No %ss found in %s.\n", kindName, func() string {
+			fmt.Printf("在 %s 中没有找到 %ss。\n", func() string {
 				if namespace == "all" {
-					return "all namespaces"
+					return "所有命名空间"
 				}
 				return namespace
-			}())
+			}(), kindName)
 			continue
 		}
 
@@ -308,12 +299,12 @@ func main() {
 			}
 			resources = filteredUnstructuredSecrets
 			if len(resources) < initialSecretCount {
-				fmt.Printf("Filtered out %d internal Secrets.\n", initialSecretCount-len(resources))
+				fmt.Printf("过滤掉了 %d 个内部 Secret。\n", initialSecretCount-len(resources))
 			}
 		}
 
 		if len(resources) == 0 {
-			fmt.Printf("No %ss to backup after filtering.\n", kindName)
+			fmt.Printf("过滤后没有要备份的 %ss。\n", kindName)
 			continue
 		}
 
@@ -325,27 +316,26 @@ func main() {
 
 			metadata, ok := cleaned["metadata"].(map[string]interface{})
 			if !ok {
-				fmt.Printf("Warning: Resource %s has no valid metadata, skipping.\n", kindName)
+				fmt.Printf("警告：资源 %s 没有有效的元数据，跳过。\n", kindName)
 				continue
 			}
 			name, ok := metadata["name"].(string)
 			if !ok {
-				fmt.Printf("Warning: Resource %s has no valid name, skipping.\n", kindName)
+				fmt.Printf("警告：资源 %s 没有有效的名称，跳过。\n", kindName)
 				continue
 			}
 
-			namespaceDir := "_cluster_" // Default for cluster-scoped resources
+			namespaceDir := "_cluster_"
 			if ns, ok := metadata["namespace"].(string); ok && ns != "" {
 				namespaceDir = ns
 			}
 
-			// Construct new directory structure: finalBackupRoot/namespace/resource_type/
 			nsDir := filepath.Join(finalBackupRoot, namespaceDir)
 			resourceTypeDir := filepath.Join(nsDir, resTypePlural)
 
-			err = os.MkdirAll(resourceTypeDir, os.ModePerm) // Create resource type directory
+			err = os.MkdirAll(resourceTypeDir, os.ModePerm)
 			if err != nil {
-				fmt.Printf("Error: Failed to create directory '%s': %v\n", resourceTypeDir, err)
+				fmt.Printf("错误：创建目录 %s 失败: %v\n", resourceTypeDir, err)
 				continue
 			}
 
@@ -359,18 +349,18 @@ func main() {
 				outputData["spec"] = spec
 			}
 
-			// Special handling for ConfigMap's data field
+			// 特殊处理 ConfigMap 的 data 字段
 			if data, ok := cleaned["data"]; ok {
 				if dataMap, isMap := data.(map[string]interface{}); isMap {
-					outputData["data"] = processStringMapValues(dataMap) // Call new processing function
+					outputData["data"] = processStringMapValues(dataMap) // 调用新的处理函数
 				} else {
 					outputData["data"] = data
 				}
 			}
-			// Special handling for Secret's stringData field (do NOT process Secret's data field, as it's typically Base64 encoded)
+			// 特殊处理 Secret 的 stringData 字段 (不处理 Secret 的 data 字段，因为它通常是 Base64 编码的)
 			if stringData, ok := cleaned["stringData"]; ok {
 				if stringDataMap, isMap := stringData.(map[string]interface{}); isMap {
-					outputData["stringData"] = processStringMapValues(stringDataMap) // Call new processing function
+					outputData["stringData"] = processStringMapValues(stringDataMap) // 调用新的处理函数
 				} else {
 					outputData["stringData"] = stringData
 				}
@@ -379,28 +369,28 @@ func main() {
 				outputData["rules"] = rules
 			}
 
-			yamlData, err := yaml.Marshal(outputData) // Use yaml.v3's Marshal
+			yamlData, err := yaml.Marshal(outputData)
 			if err != nil {
-				fmt.Printf("Warning: Failed to marshal resource %s/%s to YAML: %v\n", namespaceDir, name, err)
+				fmt.Printf("警告：无法将资源 %s/%s 转换为 YAML: %v\n", namespaceDir, name, err)
 				continue
 			}
 
-			filename := filepath.Join(resourceTypeDir, fmt.Sprintf("%s.yaml", name)) // Save file to resource type directory
-			err = os.WriteFile(filename, yamlData, 0644)                             // Use os.WriteFile
+			filename := filepath.Join(resourceTypeDir, fmt.Sprintf("%s.yaml", name))
+			err = os.WriteFile(filename, yamlData, 0644)
 			if err != nil {
-				fmt.Printf("Warning: Failed to save file '%s': %v\n", filename, err)
+				fmt.Printf("警告：保存文件 %s 失败: %v\n", filename, err)
 				continue
 			}
 			backedUpCountForType++
 		}
-		fmt.Printf("Backed up %d %ss.\n", backedUpCountForType, kindName)
+		fmt.Printf("备份了 %d 个 %ss。\n", backedUpCountForType, kindName)
 		totalBackedUpResources += backedUpCountForType
 	}
 
-	fmt.Printf("\n--- Backup Complete 🎉 ---\n")
-	fmt.Printf("Backup directory: %s\n", finalBackupRoot)
-	fmt.Printf("Total resources backed up: %d\n", totalBackedUpResources)
-	fmt.Println("\nTo restore resources, navigate to the respective resource type and namespace directory, then apply the YAML files:")
-	fmt.Println("  cd <Your Custom Dir>/k8s-backup-<DateTime>/<namespace>/<resource_type>/")
+	fmt.Printf("\n--- 备份完成 🎉 ---\n")
+	fmt.Printf("备份目录: %s\n", finalBackupRoot)
+	fmt.Printf("总计备份资源: %d 个\n", totalBackedUpResources)
+	fmt.Println("\n要恢复资源，请导航到相应的资源类型和命名空间目录，然后应用 YAML 文件:")
+	fmt.Println("  cd <您的自定义目录>/k8s-backup-<日期时间>/<namespace>/<resource_type>/")
 	fmt.Println("  kubectl apply -f <resource_name>.yaml")
 }
