@@ -9,6 +9,9 @@ on:
 
 jobs:
   build-and-release:
+    permissions:
+      contents: write  # 关键权限
+      id-token: write  # 可选，但推荐
     runs-on: ubuntu-latest # 在最新的 Ubuntu 运行器上执行编译和发布
 
     steps:

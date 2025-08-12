@@ -7,7 +7,7 @@ SHELL := /bin/bash
 # VERSION 可以是固定的，也可以是动态生成的，例如：
 # VERSION := 1.0.0
 # 获取当前日期时间作为版本（推荐，每次编译都有唯一版本）
-VERSION := $(shell date +%Y%m%d%H%M%S)
+VERSION ?= $(shell date +%Y%m%d%H%M%S)
 # 如果需要包含 Git commit hash，可以这样（需要有 Git 环境）：
 # GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 # VERSION := $(shell date +%Y%m%d)-${GIT_COMMIT}
