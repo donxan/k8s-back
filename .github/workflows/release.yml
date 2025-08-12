@@ -47,7 +47,13 @@ jobs:
         # Pass the extracted tag version to the Makefile's VERSION variable
         # This ensures the binary's internal version matches the release tag.
         VERSION: ${{ env.RELEASE_VERSION }} 
-
+    - name: Upload Binaries as Artifacts # 步骤6: 将编译好的二进制文件作为工作流产物上传
+      uses: actions/upload-artifact@v4
+      with:
+        name: k8s-backup-binaries # 产物的名称
+        path: |
+          k8s-backup* # 上传所有以 k8s-backup 开头的文件 (例如 k8s-backup-linux-amd64, k8s-backup-windows-amd64.exe 等)
+        retention-days: 7 # 产物保留7天
     - name: 创建 GitHub Release # Step 7: Create a new GitHub Release and upload assets
       uses: softprops/action-gh-release@v2 # 使用 softprops/action-gh-release action
       if: startsWith(github.ref, 'refs/tags/') # 确保只有在标签推送时才创建 Release
