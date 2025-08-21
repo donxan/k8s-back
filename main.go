@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
-	"gopkg.in/yaml.v3"
-	authorizationv1 "k8s.io/api/authorization/v1"
+	yaml "gopkg.in/yaml.v3"
+	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,53 +20,163 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// version 变量将在编译时由 Makefile 注入
-var version string = "unknown" // 如果未通过 ldflags 注入，则显示此默认值
+var version string = "v2.1.4" // 默认版本号
 
-// ResourceInfo 定义了备份一个资源所需的所有信息
+// ResourceInfo 包含资源的完整定义
 type ResourceInfo struct {
-	Kind string
-	GVR  schema.GroupVersionResource
+	Kind       string
+	GVR        schema.GroupVersionResource
+	CorePath   bool // 是否是core API组资源
+	Namespaced bool
 }
 
-// ResourceInfoMap 将资源类型映射到其详细信息
-var ResourceInfoMap = map[string]ResourceInfo{
-	"configmaps":               {Kind: "ConfigMap", GVR: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}},
-	"deployments":              {Kind: "Deployment", GVR: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}},
-	"secrets":                  {Kind: "Secret", GVR: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}},
-	"services":                 {Kind: "Service", GVR: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}},
-	"persistentvolumeclaims":   {Kind: "PersistentVolumeClaim", GVR: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}},
-	"statefulsets":             {Kind: "StatefulSet", GVR: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}},
-	"horizontalpodautoscalers": {Kind: "HorizontalPodAutoscaler", GVR: schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}},
-	"cronjobs":                 {Kind: "CronJob", GVR: schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}},
-	"jobs":                     {Kind: "Job", GVR: schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}},
-	"persistentvolumes":        {Kind: "PersistentVolume", GVR: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"}},
-	"serviceaccounts":          {Kind: "ServiceAccount", GVR: schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}},
+// 资源类型映射表
+var resourceMap = map[string]ResourceInfo{
+	"configmaps": {
+		Kind: "ConfigMap", CorePath: true,
+		GVR: schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "configmaps",
+		},
+		Namespaced: true,
+	},
+	"deployments": {
+		Kind: "Deployment",
+		GVR: schema.GroupVersionResource{
+			Group:    "apps",
+			Version:  "v1",
+			Resource: "deployments",
+		},
+		Namespaced: true,
+	},
+	"secrets": {
+		Kind: "Secret", CorePath: true,
+		GVR: schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "secrets",
+		},
+		Namespaced: true,
+	},
+	"services": {
+		Kind: "Service", CorePath: true,
+		GVR: schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "services",
+		},
+		Namespaced: true,
+	},
+	"persistentvolumeclaims": {
+		Kind: "PersistentVolumeClaim", CorePath: true,
+		GVR: schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "persistentvolumeclaims",
+		},
+		Namespaced: true,
+	},
+	"statefulsets": {
+		Kind: "StatefulSet",
+		GVR: schema.GroupVersionResource{
+			Group:    "apps",
+			Version:  "v1",
+			Resource: "statefulsets",
+		},
+		Namespaced: true,
+	},
+	"horizontalpodautoscalers": {
+		Kind: "HorizontalPodAutoscaler",
+		GVR: schema.GroupVersionResource{
+			Group:    "autoscaling",
+			Version:  "v2",
+			Resource: "horizontalpodautoscalers",
+		},
+		Namespaced: true,
+	},
+	"cronjobs": {
+		Kind: "CronJob",
+		GVR: schema.GroupVersionResource{
+			Group:    "batch",
+			Version:  "v1",
+			Resource: "cronjobs",
+		},
+		Namespaced: true,
+	},
+	"jobs": {
+		Kind: "Job",
+		GVR: schema.GroupVersionResource{
+			Group:    "batch",
+			Version:  "v1",
+			Resource: "jobs",
+		},
+		Namespaced: true,
+	},
+	"persistentvolumes": {
+		Kind: "PersistentVolume", CorePath: true,
+		GVR: schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "persistentvolumes",
+		},
+		Namespaced: false,
+	},
+	"serviceaccounts": {
+		Kind: "ServiceAccount", CorePath: true,
+		GVR: schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "serviceaccounts",
+		},
+		Namespaced: true,
+	},
+	"ingresses": {
+		Kind: "Ingress",
+		GVR: schema.GroupVersionResource{
+			Group:    "networking.k8s.io",
+			Version:  "v1",
+			Resource: "ingresses",
+		},
+		Namespaced: true,
+	},
 }
 
-// CleanResource 从资源清单中删除不必要的、由集群生成的字段
+// CleanResource 清理资源中无用字段，保留必要配置
 func CleanResource(resource map[string]interface{}) map[string]interface{} {
 	if resource == nil {
 		return nil
 	}
 
-	cleanedResource := make(map[string]interface{})
+	cleaned := make(map[string]interface{})
 	for k, v := range resource {
-		cleanedResource[k] = v
+		cleaned[k] = v
 	}
 
-	// 清理元数据
-	if metadata, ok := cleanedResource["metadata"].(map[string]interface{}); ok {
-		for _, field := range []string{"creationTimestamp", "resourceVersion", "selfLink", "uid", "managedFields", "generation"} {
+	// 清理metadata字段
+	metadata, ok := cleaned["metadata"].(map[string]interface{})
+	if ok {
+		// 移除自动生成的服务器字段
+		for _, field := range []string{
+			"creationTimestamp", "resourceVersion", "selfLink",
+			"uid", "managedFields", "generation",
+		} {
 			delete(metadata, field)
 		}
+
+		// 清理annotations
 		if annotations, ok := metadata["annotations"].(map[string]interface{}); ok {
 			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+			delete(annotations, "deployment.kubernetes.io/revision")
+
+			// 清理空annotations
 			if len(annotations) == 0 {
 				delete(metadata, "annotations")
 			}
 		}
-		for _, field := range []string{"annotations", "labels", "finalizers"} {
+
+		// 清理空labels和finalizers
+		for _, field := range []string{"labels", "finalizers"} {
 			if val, exists := metadata[field]; exists {
 				if m, isMap := val.(map[string]interface{}); isMap && len(m) == 0 {
 					delete(metadata, field)
@@ -75,45 +185,47 @@ func CleanResource(resource map[string]interface{}) map[string]interface{} {
 		}
 	}
 
-	// 删除 status 字段，它总是在运行时生成
-	delete(cleanedResource, "status")
+	// 移除状态信息
+	delete(cleaned, "status")
 
-	kind, _ := cleanedResource["kind"].(string)
-
+	// 资源类型特定处理
+	kind, _ := cleaned["kind"].(string)
 	switch kind {
-	case "Deployment":
-		// 重要提示：不要删除 spec.selector。它是必需的且不可变的字段。
-		break
 	case "Service":
-		if spec, ok := cleanedResource["spec"].(map[string]interface{}); ok {
-			// 优化：仅删除纯粹由控制器管理的字段。
-			// 保留用户可配置的字段，如 externalTrafficPolicy, internalTrafficPolicy,
-			// 和 ipFamilyPolicy，这些对于恢复服务的原始行为至关重要。
-			delete(spec, "clusterIP")
-			delete(spec, "clusterIPs")
-
-			// 仅当服务类型本身不使用 nodePort 时才删除它。
-			if serviceType, ok := spec["type"].(string); ok && serviceType != "NodePort" && serviceType != "LoadBalancer" {
-				if ports, ok := spec["ports"].([]interface{}); ok {
-					for _, p := range ports {
-						if portMap, isMap := p.(map[string]interface{}); isMap {
-							delete(portMap, "nodePort")
-						}
-					}
-				}
+		// 保留externalTrafficPolicy等流量策略配置
+		if spec, ok := cleaned["spec"].(map[string]interface{}); ok {
+			// 只移除集群特定字段，保留业务相关配置
+			for _, field := range []string{"clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy"} {
+				delete(spec, field)
 			}
 		}
+	case "Deployment":
+		if spec, ok := cleaned["spec"].(map[string]interface{}); ok {
+			// 保留selector完整配置
+			delete(spec, "progressDeadlineSeconds")
+			delete(spec, "revisionHistoryLimit")
+			// 保留但不自动设置副本数
+			delete(spec, "replicas")
+		}
+	case "StatefulSet":
+		if spec, ok := cleaned["spec"].(map[string]interface{}); ok {
+			delete(spec, "revisionHistoryLimit")
+			delete(spec, "replicas")
+		}
 	case "PersistentVolume":
-		if spec, ok := cleanedResource["spec"].(map[string]interface{}); ok {
-			// claimRef 是一个动态绑定，不应包含在备份中。
+		if spec, ok := cleaned["spec"].(map[string]interface{}); ok {
+			// 保留但移除集群绑定信息
 			delete(spec, "claimRef")
 		}
+	case "Pod":
+		// Pod通常不需要备份，但这里保留逻辑
+		delete(cleaned, "spec")
 	}
 
-	return cleanedResource
+	return cleaned
 }
 
-// ShouldBackupSecret 判断一个 Secret 是否应该被备份，过滤掉服务账户令牌。
+// ShouldBackupSecret 判断Secret是否需要备份
 func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	metadata, ok := secretObj["metadata"].(map[string]interface{})
 	if !ok {
@@ -122,223 +234,452 @@ func ShouldBackupSecret(secretObj map[string]interface{}) bool {
 	name, _ := metadata["name"].(string)
 	secretType, _ := secretObj["type"].(string)
 
-	// 过滤掉自动生成的令牌和 Helm release secrets
-	if strings.Contains(name, "-token-") || strings.HasPrefix(name, "sh.helm.release.v1.") {
+	// 跳过系统生成的Secret
+	if strings.Contains(name, "default-token") ||
+		strings.HasPrefix(name, "sh.helm.release.v1.") ||
+		strings.Contains(name, "-token-") {
 		return false
 	}
 
-	switch corev1.SecretType(secretType) {
-	case corev1.SecretTypeServiceAccountToken, "helm.sh/release.v1":
-		return false
+	// 跳过特定类型的Secret
+	excludedTypes := []string{
+		string(corev1.SecretTypeDockerConfigJson),
+		string(corev1.SecretTypeServiceAccountToken),
+		string(corev1.SecretTypeBasicAuth),
+		string(corev1.SecretTypeTLS),
+		"helm.sh/release.v1",
+	}
+	for _, t := range excludedTypes {
+		if secretType == t {
+			return false
+		}
 	}
 
 	return true
 }
 
-// processStringMapValues 递归地清理 map 中的字符串值。
-func processStringMapValues(m map[string]interface{}) {
+// processStringMapValues 标准化字符串值
+func processStringMapValues(m map[string]interface{}) map[string]interface{} {
 	if m == nil {
-		return
+		return nil
 	}
+	processed := make(map[string]interface{})
 	for k, v := range m {
-		if s, isString := v.(string); isString {
-			s = strings.ReplaceAll(s, "\r\n", "\n")  // 规范化换行符
-			s = strings.ReplaceAll(s, "\\n", "\n")   // 解码换行符
-			s = strings.ReplaceAll(s, "\\r", "\r")   // 解码回车符
-			s = strings.ReplaceAll(s, "\u00A0", " ") // 替换不间断空格
-			m[k] = s
-		} else if subMap, isMap := v.(map[string]interface{}); isMap {
-			processStringMapValues(subMap)
+		switch val := v.(type) {
+		case string:
+			s := val
+			s = strings.ReplaceAll(s, "\r\n", "\n") // Windows换行符转换
+			s = strings.ReplaceAll(s, "\\n", "\n")  // 转义符解码
+			s = strings.ReplaceAll(s, "\\t", "\t")
+			s = strings.ReplaceAll(s, "\\r", "\r")
+			s = strings.ReplaceAll(s, "\u00A0", " ") // 非中断空格处理
+			processed[k] = s
+		case map[string]interface{}:
+			processed[k] = processStringMapValues(val)
+		default:
+			processed[k] = v
 		}
 	}
+	return processed
 }
 
-// canListResource 检查当前用户是否具有列出指定资源的权限。
-func canListResource(clientset *kubernetes.Clientset, gvr schema.GroupVersionResource, namespace string) (bool, error) {
-	sar := &authorizationv1.SelfSubjectAccessReview{
-		Spec: authorizationv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authorizationv1.ResourceAttributes{
-				Namespace: namespace,
-				Verb:      "list",
+// checkResourceAccess 检查当前用户是否有资源读取权限
+func checkResourceAccess(
+	clientset *kubernetes.Clientset,
+	gvr schema.GroupVersionResource,
+	namespace string,
+	verb string,
+) bool {
+	ssar := &authv1.SelfSubjectAccessReview{
+		Spec: authv1.SelfSubjectAccessReviewSpec{
+			ResourceAttributes: &authv1.ResourceAttributes{
 				Group:     gvr.Group,
+				Version:   gvr.Version,
 				Resource:  gvr.Resource,
+				Verb:      verb,
+				Namespace: namespace,
 			},
 		},
 	}
 
-	response, err := clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(context.TODO(), sar, metav1.CreateOptions{})
+	result, err := clientset.AuthorizationV1().SelfSubjectAccessReviews().Create(
+		context.TODO(), ssar, metav1.CreateOptions{})
 	if err != nil {
-		return false, fmt.Errorf("检查权限失败: %w", err)
+		fmt.Printf("权限检查失败 [%s/%s]: %v\n", gvr.Resource, namespace, err)
+		return false
 	}
 
-	return response.Status.Allowed, nil
+	return result.Status.Allowed
 }
 
 func main() {
-	var kubeconfig, namespace, resourceTypesStr, outputDir string
+	var kubeconfig string
+	var namespace string
+	var resourceTypesStr string
+	var outputDir string
 	var showVersion bool
+	var skipNamespacesStr string
+	var skipSecrets bool
+	var skipClusterResources bool
 
-	pflag.StringVar(&kubeconfig, "kubeconfig", "", "(可选) kubeconfig 文件的路径")
-	pflag.StringVarP(&namespace, "namespace", "n", "all", "要备份的命名空间 ('all' 表示所有命名空间)")
-	pflag.StringVarP(&resourceTypesStr, "type", "t", "", "要备份的资源类型列表 (用逗号分隔)")
-	pflag.StringVarP(&outputDir, "output-dir", "o", ".", "备份文件的根目录")
-	pflag.BoolVarP(&showVersion, "version", "v", false, "显示版本信息")
+	pflag.StringVar(&kubeconfig, "kubeconfig", "", "Kubeconfig文件路径")
+	pflag.StringVarP(&namespace, "namespace", "n", "all", "备份命名空间 ('all' 备份所有命名空间)")
+	pflag.StringVarP(&resourceTypesStr, "type", "t", "", "资源类型列表 (逗号分隔)")
+	pflag.StringVarP(&outputDir, "output-dir", "o", ".", "备份目录")
+	pflag.StringVarP(&skipNamespacesStr, "exclude-namespaces", "e", "kube-system", "排除的命名空间列表")
+	pflag.BoolVarP(&skipSecrets, "skip-secrets", "s", false, "跳过所有Secret备份")
+	pflag.BoolVarP(&skipClusterResources, "no-cluster-resources", "c", false, "跳过集群级资源")
+	pflag.BoolVarP(&showVersion, "version", "v", false, "显示版本")
 	pflag.Parse()
 
+	// 打印版本信息
 	if showVersion {
-		fmt.Printf("Kubernetes 备份工具版本: %s\n", version)
-		return
+		fmt.Printf("Kubernetes资源备份工具 v%s\n", version)
+		pflag.Usage()
+		os.Exit(0)
 	}
 
+	// 配置加载
 	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
-		fmt.Printf("错误: 无法加载 Kubernetes 配置: %v\n", err)
+		fmt.Printf("错误: 无法加载Kubernetes配置: %v\n", err)
+		fmt.Println("排查建议:")
+		fmt.Println("  1. 确认 kubeconfig 文件存在:`kubectl config view`")
+		fmt.Println("  2. 检查集群连通性:`kubectl cluster-info`")
 		os.Exit(1)
 	}
 
-	// 创建用于权限检查的标准 clientset
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		fmt.Printf("错误: 无法创建 Kubernetes clientset: %v\n", err)
-		os.Exit(1)
-	}
-
-	// 创建用于获取资源的动态 client
+	// 创建客户端
 	dynamicClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		fmt.Printf("错误: 无法创建 Kubernetes 动态客户端: %v\n", err)
+		fmt.Printf("错误: 创建动态客户端失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	finalBackupRoot := filepath.Join(outputDir, fmt.Sprintf("k8s-backup-%s", time.Now().Format("20060102150405")))
-	if err := os.MkdirAll(finalBackupRoot, os.ModePerm); err != nil {
-		fmt.Printf("错误: 无法创建备份根目录 '%s': %v\n", finalBackupRoot, err)
+	// 创建 Kubernetes 客户端（用于权限检查）
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		fmt.Printf("错误: 创建标准客户端失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	var resourceTypesToBackup []string
+	// 解析排除的命名空间
+	skipNamespaces := strings.Split(skipNamespacesStr, ",")
+	if len(skipNamespaces) == 0 {
+		skipNamespaces = []string{"kube-system"}
+	}
+
+	// 准备备份目录
+	timestamp := time.Now().Format("20060102-150405")
+	backupRoot := filepath.Join(outputDir, fmt.Sprintf("k8s-backup-%s", timestamp))
+	if err := os.MkdirAll(backupRoot, 0755); err != nil {
+		fmt.Printf("错误: 创建备份目录失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("备份开始于: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	fmt.Printf("备份目录: %s\n", backupRoot)
+	fmt.Printf("排除命名空间: %v\n", skipNamespaces)
+	if skipSecrets {
+		fmt.Println("配置: 跳过所有Secret备份")
+	}
+	if skipClusterResources {
+		fmt.Println("配置: 跳过集群级资源")
+	}
+
+	// 确定要备份的资源类型
+	var resourceTypes []string
 	if resourceTypesStr != "" {
-		resourceTypesToBackup = strings.Split(resourceTypesStr, ",")
+		resourceTypes = strings.Split(resourceTypesStr, ",")
 	} else {
-		for rType := range ResourceInfoMap {
-			resourceTypesToBackup = append(resourceTypesToBackup, rType)
+		for resType := range resourceMap {
+			resourceTypes = append(resourceTypes, resType)
 		}
 	}
+	fmt.Printf("备份资源类型: %v\n", resourceTypes)
 
-	totalBackedUpResources := 0
+	// 获取命名空间
+	var targetNamespaces []corev1.Namespace
+	switch namespace {
+	case "all":
+		nsClient := dynamicClient.Resource(schema.GroupVersionResource{
+			Group:    "",
+			Version:  "v1",
+			Resource: "namespaces",
+		})
 
-	for _, resTypePlural := range resourceTypesToBackup {
-		resInfo, ok := ResourceInfoMap[resTypePlural]
-		if !ok {
-			fmt.Printf("警告: 不支持的资源类型 '%s'，已跳过。\n", resTypePlural)
-			continue
-		}
-
-		fmt.Printf("\n--- 正在处理 %ss ---\n", resInfo.Kind)
-
-		// === 权限检查 ===
-		checkNS := namespace
-		if namespace == "all" {
-			checkNS = "" // 对于 'all'，在集群级别进行检查
-		}
-		allowed, err := canListResource(clientset, resInfo.GVR, checkNS)
+		nsList, err := nsClient.List(context.TODO(), metav1.ListOptions{})
 		if err != nil {
-			fmt.Printf("警告: 无法验证 '%s' 的权限，已跳过。错误: %v\n", resTypePlural, err)
-			continue
-		}
-		if !allowed {
-			nsMsg := fmt.Sprintf("命名空间 '%s'", namespace)
-			if namespace == "all" {
-				nsMsg = "所有命名空间"
-			}
-			fmt.Printf("警告: 权限不足，无法在 %s 中 'list' (列出) '%s' 类型的资源。已跳过。\n", nsMsg, resTypePlural)
-			continue
-		}
-		// === 权限检查结束 ===
-
-		var resClient dynamic.ResourceInterface
-		if namespace == "all" {
-			resClient = dynamicClient.Resource(resInfo.GVR)
+			fmt.Printf("警告: 获取命名空间失败: %v\n", err)
 		} else {
-			resClient = dynamicClient.Resource(resInfo.GVR).Namespace(namespace)
-		}
-
-		unstructuredList, err := resClient.List(context.TODO(), metav1.ListOptions{})
-		if err != nil {
-			fmt.Printf("错误: 列出 %s 资源失败: %v\n", resTypePlural, err)
-			continue
-		}
-
-		resources := unstructuredList.Items
-		if len(resources) == 0 {
-			continue // 没有找到此类型的资源，继续下一个
-		}
-
-		if resTypePlural == "secrets" {
-			var filteredResources []unstructured.Unstructured
-			for _, r := range resources {
-				if ShouldBackupSecret(r.Object) {
-					filteredResources = append(filteredResources, r)
+			for _, ns := range nsList.Items {
+				nsName := ns.GetName()
+				skip := false
+				for _, skipNS := range skipNamespaces {
+					if nsName == skipNS {
+						skip = true
+						break
+					}
+				}
+				if !skip {
+					targetNamespaces = append(targetNamespaces, corev1.Namespace{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: nsName,
+						},
+					})
 				}
 			}
-			resources = filteredResources
 		}
+	default:
+		targetNamespaces = []corev1.Namespace{{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+			},
+		}}
+	}
 
-		if len(resources) == 0 {
-			fmt.Printf("没有找到可备份的用户管理的 %ss。\n", resInfo.Kind)
-			continue
-		}
-
-		backedUpCountForType := 0
-		for _, resource := range resources {
-			resource.SetKind(resInfo.Kind)
-			cleaned := CleanResource(resource.Object)
-
-			metadata, _ := cleaned["metadata"].(map[string]interface{})
-			name, _ := metadata["name"].(string)
-
-			nsDirName := "_cluster_"
-			if ns, found, _ := unstructured.NestedString(metadata, "namespace"); found && ns != "" {
-				nsDirName = ns
-			}
-
-			resourceTypeDir := filepath.Join(finalBackupRoot, nsDirName, resTypePlural)
-			if err := os.MkdirAll(resourceTypeDir, os.ModePerm); err != nil {
-				fmt.Printf("错误: 无法创建目录 %s: %v\n", resourceTypeDir, err)
-				continue
-			}
-
-			// 处理 ConfigMap 和 Secret 的 data/stringData 字段
-			if data, found, _ := unstructured.NestedMap(cleaned, "data"); found {
-				processStringMapValues(data)
-			}
-			if stringData, found, _ := unstructured.NestedMap(cleaned, "stringData"); found {
-				processStringMapValues(stringData)
-			}
-
-			yamlData, err := yaml.Marshal(cleaned)
-			if err != nil {
-				fmt.Printf("警告: 无法将资源 %s/%s 转换为 YAML: %v\n", nsDirName, name, err)
-				continue
-			}
-
-			filename := filepath.Join(resourceTypeDir, fmt.Sprintf("%s.yaml", name))
-			if err := os.WriteFile(filename, yamlData, 0644); err != nil {
-				fmt.Printf("警告: 无法保存文件 %s: %v\n", filename, err)
-				continue
-			}
-			backedUpCountForType++
-		}
-
-		if backedUpCountForType > 0 {
-			fmt.Printf("成功备份了 %d 个 %s。\n", backedUpCountForType, resInfo.Kind)
-			totalBackedUpResources += backedUpCountForType
+	// 保存全局命名空间信息
+	if !skipClusterResources {
+		globalDir := filepath.Join(backupRoot, "_global")
+		if err := os.MkdirAll(globalDir, 0755); err != nil {
+			fmt.Printf("警告: 创建全局目录失败: %v\n", err)
 		}
 	}
 
-	fmt.Printf("\n--- 备份完成 🎉 ---\n")
-	fmt.Printf("备份目录: %s\n", finalBackupRoot)
-	fmt.Printf("总共备份的资源数量: %d\n", totalBackedUpResources)
-	fmt.Println("\n要恢复资源，请应用其对应的 YAML 文件:")
-	fmt.Println("  kubectl apply -f <备份目录>/<命名空间>/<资源类型>/<资源名称>.yaml")
+	// 备份主循环
+	totalResources := 0
+	startTime := time.Now()
+
+	for _, ns := range targetNamespaces {
+		nsName := ns.Name
+		fmt.Printf("\n[命名空间: %s]\n", nsName)
+		nsDir := filepath.Join(backupRoot, nsName)
+		if err := os.MkdirAll(nsDir, 0755); err != nil {
+			fmt.Printf("警告: 创建命名空间目录失败: %v\n", err)
+			continue
+		}
+
+		// 保存命名空间元数据
+		nsYaml, err := yaml.Marshal(map[string]interface{}{
+			"apiVersion": "v1",
+			"kind":       "Namespace",
+			"metadata": map[string]interface{}{
+				"name": nsName,
+			},
+		})
+		if err == nil {
+			os.WriteFile(filepath.Join(nsDir, "00-namespace.yaml"), nsYaml, 0644)
+		}
+
+		// 备份命名空间的资源
+		nsResources := 0
+		for _, resType := range resourceTypes {
+			resInfo, exists := resourceMap[resType]
+			if !exists {
+				fmt.Printf("  警告: 跳过不支持的类型: %s\n", resType)
+				continue
+			}
+
+			// 检查权限
+			if !checkResourceAccess(clientset, resInfo.GVR, nsName, "list") {
+				fmt.Printf("  警告: 无权限读取 %s/%s，跳过\n", nsName, resInfo.Kind)
+				continue
+			}
+
+			// 特殊处理Secret跳过
+			if skipSecrets && resType == "secrets" {
+				fmt.Printf("  配置跳过: %s\n", resInfo.Kind)
+				continue
+			}
+
+			// 集群级资源放全局目录处理
+			if !resInfo.Namespaced {
+				if skipClusterResources {
+					continue
+				}
+				fmt.Printf("  资源 %s 是集群级资源，将在全局目录处理\n", resInfo.Kind)
+				continue
+			}
+
+			resClient := dynamicClient.Resource(resInfo.GVR).Namespace(nsName)
+			resList, err := resClient.List(context.TODO(), metav1.ListOptions{})
+			if err != nil {
+				fmt.Printf("  错误: 获取 %s 失败: %v\n", resInfo.Kind, err)
+				continue
+			}
+
+			resources := resList.Items
+			if len(resources) == 0 {
+				continue
+			}
+
+			fmt.Printf("  资源: %s (找到 %d 个)\n", resInfo.Kind, len(resources))
+
+			// 创建资源类型目录
+			resDir := filepath.Join(nsDir, resType)
+			if err := os.MkdirAll(resDir, 0755); err != nil {
+				fmt.Printf("    错误: 创建目录失败: %v\n", err)
+				continue
+			}
+
+			// 特殊过滤逻辑
+			if resType == "secrets" {
+				filtered := []unstructured.Unstructured{}
+				for _, r := range resources {
+					if ShouldBackupSecret(r.Object) {
+						filtered = append(filtered, r)
+					}
+				}
+				fmt.Printf("    过滤后剩余 %d 个Secret\n", len(filtered))
+				resources = filtered
+			}
+
+			backupCount := 0
+			for _, resource := range resources {
+				obj := resource.Object
+				obj = CleanResource(obj)
+
+				// 构建YAML结构
+				resourceYAML := map[string]interface{}{
+					"apiVersion": obj["apiVersion"],
+					"kind":       obj["kind"],
+					"metadata":   obj["metadata"],
+				}
+
+				// 添加核心字段
+				if spec, hasSpec := obj["spec"]; hasSpec {
+					resourceYAML["spec"] = spec
+				}
+				if data, hasData := obj["data"]; hasData {
+					resourceYAML["data"] = data
+				}
+				if rules, hasRules := obj["rules"]; hasRules {
+					resourceYAML["rules"] = rules
+				}
+
+				// 处理字符串转义问题
+				if resType == "configmaps" {
+					if data, ok := resourceYAML["data"].(map[string]interface{}); ok {
+						resourceYAML["data"] = processStringMapValues(data)
+					}
+				}
+
+				yamlData, err := yaml.Marshal(resourceYAML)
+				if err != nil {
+					fmt.Printf("    错误: 序列化失败: %v\n", err)
+					continue
+				}
+
+				name := resource.GetName()
+				filename := fmt.Sprintf("%s.yaml", name)
+				fullPath := filepath.Join(resDir, filename)
+				if err := os.WriteFile(fullPath, yamlData, 0644); err != nil {
+					fmt.Printf("    错误: 写入文件失败: %v\n", err)
+					continue
+				}
+
+				backupCount++
+			}
+
+			fmt.Printf("    ✓ 备份 %d 个 %s\n", backupCount, resInfo.Kind)
+			nsResources += backupCount
+			totalResources += backupCount
+		}
+	}
+
+	// 备份集群范围资源（如果不跳过）
+	if !skipClusterResources {
+		fmt.Println("\n[集群范围资源]")
+		globalDir := filepath.Join(backupRoot, "_global")
+
+		// 创建集群级资源目录
+		if err := os.MkdirAll(globalDir, 0755); err != nil {
+			fmt.Printf("警告: 创建全局目录失败: %v\n", err)
+		} else {
+			for _, resType := range resourceTypes {
+				resInfo, exists := resourceMap[resType]
+				if !exists || resInfo.Namespaced {
+					continue
+				}
+
+				// 检查权限
+				if !checkResourceAccess(clientset, resInfo.GVR, "", "list") {
+					fmt.Printf("  警告: 无权限读取 %s，跳过\n", resInfo.Kind)
+					continue
+				}
+
+				resClient := dynamicClient.Resource(resInfo.GVR)
+				resList, err := resClient.List(context.TODO(), metav1.ListOptions{})
+				if err != nil {
+					fmt.Printf("  错误: 获取 %s 失败: %v\n", resInfo.Kind, err)
+					continue
+				}
+
+				resources := resList.Items
+				if len(resources) == 0 {
+					continue
+				}
+
+				fmt.Printf("  资源: %s (找到 %d 个)\n", resInfo.Kind, len(resources))
+
+				resDir := filepath.Join(globalDir, resType)
+				if err := os.MkdirAll(resDir, 0755); err != nil {
+					fmt.Printf("    错误: 创建目录失败: %v\n", err)
+					continue
+				}
+
+				backupCount := 0
+				for _, resource := range resources {
+					obj := resource.Object
+					obj = CleanResource(obj)
+
+					resourceYAML := map[string]interface{}{
+						"apiVersion": obj["apiVersion"],
+						"kind":       obj["kind"],
+						"metadata":   obj["metadata"],
+					}
+
+					if spec, hasSpec := obj["spec"]; hasSpec {
+						resourceYAML["spec"] = spec
+					}
+
+					yamlData, err := yaml.Marshal(resourceYAML)
+					if err != nil {
+						fmt.Printf("    错误: 序列化失败: %v\n", err)
+						continue
+					}
+
+					name := resource.GetName()
+					filename := fmt.Sprintf("%s.yaml", name)
+					fullPath := filepath.Join(resDir, filename)
+					if err := os.WriteFile(fullPath, yamlData, 0644); err != nil {
+						fmt.Printf("    错误: 写入文件失败: %v\n", err)
+						continue
+					}
+
+					backupCount++
+				}
+
+				fmt.Printf("    ✓ 备份 %d 个 %s\n", backupCount, resInfo.Kind)
+				totalResources += backupCount
+			}
+		}
+	}
+
+	// 完成输出
+	duration := time.Since(startTime).Round(time.Second)
+	fmt.Printf("\n备份完成 🎉\n")
+	fmt.Printf("总耗时: %s\n", duration)
+	fmt.Printf("备份资源总数: %d\n", totalResources)
+	fmt.Printf("备份位置: %s\n", backupRoot)
+	fmt.Println("")
+	fmt.Println("恢复说明:")
+	fmt.Println("1. 恢复命名空间:")
+	fmt.Printf("   kubectl apply -f %s/<namespace>/00-namespace.yaml\n", backupRoot)
+	fmt.Println("2. 恢复资源:")
+	fmt.Printf("   kubectl apply -f %s/<namespace>/<resource_type>/ --recursive\n", backupRoot)
+	fmt.Println("3. 恢复集群级资源: (如有)")
+	fmt.Printf("   kubectl apply -f %s/_global/ --recursive\n", backupRoot)
+	fmt.Println("")
+	fmt.Println("注意: 使用前建议检查备份文件内容")
 }
