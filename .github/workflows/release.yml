@@ -70,7 +70,7 @@ jobs:
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         force: true
-        branch: release
+        branch:  ${{ env.RELEASE_VERSION }}
 
     - name: Upload Binaries as Artifacts # 步骤6: 将编译好的二进制文件作为工作流产物上传
       uses: actions/upload-artifact@v4
